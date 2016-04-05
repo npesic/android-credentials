@@ -110,4 +110,21 @@
 
     </LinearLayout>
 
+    <LinearLayout
+        android:id="@+id/layout_play"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_below="@id/layout_load"
+        android:layout_centerHorizontal="true"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/button_request_credentials"
+            android:layout_width="150dp"
+            android:layout_height="wrap_content"
+            android:enabled="true"
+            android:text="@string/request_id_token" />
+
+    </LinearLayout>
+
 </RelativeLayout>

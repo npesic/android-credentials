@@ -19,6 +19,8 @@ import android.app.PendingIntent;
 import android.content.Intent;
 import android.content.IntentSender;
 import android.os.Bundle;
+import android.os.Handler;
+import android.support.annotation.NonNull;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.Toolbar;
 import android.util.Log;
@@ -34,9 +36,12 @@ import com.google.android.gms.auth.api.credentials.CredentialRequestResult;
 import com.google.android.gms.auth.api.credentials.HintRequest;
 import com.google.android.gms.auth.api.credentials.IdToken;
 import com.google.android.gms.auth.api.credentials.IdentityProviders;
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions;
+import com.google.android.gms.auth.api.signin.GoogleSignInResult;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.api.CommonStatusCodes;
 import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.common.api.OptionalPendingResult;
 import com.google.android.gms.common.api.ResolvingResultCallbacks;
 import com.google.android.gms.common.api.ResultCallback;
 import com.google.android.gms.common.api.Status;
@@ -48,7 +53,9 @@ import com.google.android.gms.common.api.Status;
 public class MainActivity extends AppCompatActivity implements
         View.OnClickListener,
         GoogleApiClient.ConnectionCallbacks,
-        GoogleApiClient.OnConnectionFailedListener {
+        GoogleApiClient.OnConnectionFailedListener,
+        MockServerReceiver.Receiver
+{
 
     private static final String TAG = MainActivity.class.getSimpleName();
     private static final String KEY_IS_RESOLVING = "is_resolving";
@@ -62,6 +69,23 @@ public class MainActivity extends AppCompatActivity implements
     private GoogleApiClient mCredentialsApiClient;
     private Credential mCurrentCredential;
     private boolean mIsResolving = false;
+
+    private MockServerReceiver mReceiver;
+
+    private String WEB_SERVER_CLIENT_ID = "961906352730-f0pis2s0b127ftca4l42g84o1o17lt7b.apps.googleusercontent.com";
+
+    @Override
+    public void onReceiveResult(int resultCode, Bundle resultData) {
+        String res = resultData.getString("result");
+        switch (resultCode) {
+            case MockServer.STATUS_FINISHED:
+                showToast(res);
+                break;
+            case MockServer.STATUS_ERROR:
+                showToast(res);
+                break;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -79,6 +103,7 @@ public class MainActivity extends AppCompatActivity implements
         findViewById(R.id.button_load_credentials).setOnClickListener(this);
         findViewById(R.id.button_load_hint).setOnClickListener(this);
         findViewById(R.id.button_delete_loaded_credential).setOnClickListener(this);
+        findViewById(R.id.button_request_credentials).setOnClickListener(this);
 
         // Instance state
         if (savedInstanceState != null) {
@@ -145,6 +170,43 @@ public class MainActivity extends AppCompatActivity implements
 
                 mIsResolving = false;
                 break;
+            case 123:
+                String idToken = data.getExtras().getString("idToken");
+                String id = data.getExtras().getString("id");
+                String err = data.getExtras().getString("err");
+                if (!id.isEmpty()){
+                    showToast("idToken="+idToken);
+                    Log.d(TAG, "saving id:" + id);
+                    final Credential credentialForSave = new Credential.Builder(id)
+                            .setAccountType(IdentityProviders.GOOGLE)
+                            .build();
+
+//                    Auth.CredentialsApi.save(mCredentialsApiClient, credentialForSave).setResultCallback(
+//                            new ResolvingResultCallbacks<Status>(this, 1) {
+//                                @Override
+//                                public void onSuccess(Status status) {
+//                                    Log.d(TAG, "Credential Saved");
+//                                }
+//
+//                                @Override
+//                                public void onUnresolvableFailure(Status status) {
+//                                    Log.d(TAG, "Save Failed:" + status);
+//                                }
+//                            });
+                    mReceiver = new MockServerReceiver(new Handler());
+                    mReceiver.setReceiver(this);
+                    Intent intent =
+                            new Intent(Intent.ACTION_SYNC, null, this, MockServer.class)
+//                            new Intent(this, MockServer.class)
+                            .putExtra(MockServer.EXTRA_IDTOKEN, idToken);
+                    intent.putExtra("receiver", mReceiver);
+                    startService(intent);
+                } else {
+                    showToast("err:"+err);
+                }
+
+                Log.d(TAG, "123:idToken=" + idToken );
+                break;
         }
     }
 
@@ -173,13 +235,17 @@ public class MainActivity extends AppCompatActivity implements
         String email = mEmailField.getText().toString();
         String password = mPasswordField.getText().toString();
 
+        Preferences.setSettingsParam("email",email);
+
         // Create a Credential with the user's email as the ID and storing the password.  We
         // could also add 'Name' and 'ProfilePictureURL' but that is outside the scope of this
         // minimal sample.
         Log.d(TAG, "Saving Credential:" + email + ":" + anonymizePassword(password));
         final Credential credential = new Credential.Builder(email)
-                .setPassword(password)
+                .setAccountType(IdentityProviders.GOOGLE)
                 .build();
+//                .setPassword(password)
+//                .build();
 
         showProgress();
 
@@ -246,6 +312,30 @@ public class MainActivity extends AppCompatActivity implements
         }
     }
 
+    private void requestIdToken (String emailAddress){
+        GoogleSignInOptions gso = new GoogleSignInOptions.Builder()
+                .setAccountName(emailAddress)
+                .requestIdToken(WEB_SERVER_CLIENT_ID)
+                .build();
+
+        GoogleApiClient apiClient = new GoogleApiClient.Builder(this)
+                .addConnectionCallbacks(this)
+                .enableAutoManage(this, this)
+                .addApi(Auth.GOOGLE_SIGN_IN_API, gso)
+                .build();
+
+
+        OptionalPendingResult<GoogleSignInResult> pendingResult = Auth.GoogleSignInApi.silentSignIn(apiClient);
+        pendingResult.setResultCallback(new ResultCallback<GoogleSignInResult>() {
+            public void onResult(@NonNull GoogleSignInResult result) {
+                if (result.isSuccess()) {
+                    Log.i(TAG, "ID token: " + result.getSignInAccount().getIdToken());
+                }
+            }
+        });
+
+    }
+
     /**
      * Request Credentials from the Credentials API.
      */
@@ -254,6 +344,7 @@ public class MainActivity extends AppCompatActivity implements
         // setAccountTypes so we will not load any credentials from other Identity Providers.
         CredentialRequest request = new CredentialRequest.Builder()
                 .setSupportsPasswordLogin(true)
+                .setAccountTypes(IdentityProviders.GOOGLE)
                 .build();
 
         showProgress();
@@ -276,6 +367,8 @@ public class MainActivity extends AppCompatActivity implements
                         } else if (status.getStatusCode() == CommonStatusCodes.SIGN_IN_REQUIRED) {
                             // This means only a hint is available, but we are handling that
                             // elsewhere so no need to act here.
+//                            String idToken = credentialRequestResult.getCredential().getIdTokens().get(0).getIdToken();
+//                            Log.d (TAG, "idToken="+idToken);
                         } else {
                             Log.w(TAG, "Unexpected status code: " + status.getStatusCode());
                         }
@@ -371,6 +464,31 @@ public class MainActivity extends AppCompatActivity implements
         mEmailField.setText(credential.getId());
         mPasswordField.setText(credential.getPassword());
 
+        //requestIdToken(credential.getId());
+        Preferences.setSettingsParam("email", credential.getId());
+
+        if (isHint) {
+            Log.d(TAG, "saving id:" + credential.getId());
+            final Credential credentialForSave =
+//                    credential;
+                new Credential.Builder(credential.getId())
+                .setAccountType(IdentityProviders.GOOGLE)
+                .build();
+
+            Auth.CredentialsApi.save(mCredentialsApiClient, credentialForSave).setResultCallback(
+                    new ResolvingResultCallbacks<Status>(this, 1) {
+                        @Override
+                        public void onSuccess(Status status) {
+                            Log.d(TAG, "Credential Saved");
+                        }
+
+                        @Override
+                        public void onUnresolvableFailure(Status status) {
+                            Log.d(TAG, "Save Failed:" + status);
+                        }
+                    });
+        }
+
         if (!credential.getIdTokens().isEmpty()) {
             IdToken idToken = credential.getIdTokens().get(0);
 
@@ -402,7 +520,7 @@ public class MainActivity extends AppCompatActivity implements
 
     /** Display a short Toast message **/
     private void showToast(String msg) {
-        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
     }
 
     /** Show progress spinner and disable buttons **/
@@ -444,6 +562,10 @@ public class MainActivity extends AppCompatActivity implements
                 break;
             case R.id.button_delete_loaded_credential:
                 deleteLoadedCredentialClicked();
+                break;
+            case R.id.button_request_credentials:
+                Intent i = new Intent(UafActivity.class.getName());
+                startActivityForResult(i,123);
                 break;
         }
     }
